@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analiza Asynchroniczności: FlightScanner</title>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --secondary-color: #1e293b;
+            --accent-color: #f59e0b;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-color: #334155;
+            --code-bg: #1e1e1e;
+            --code-text: #e2e8f0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--text-color);
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        h1 {
+            color: var(--secondary-color);
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: var(--primary-color);
+            font-weight: 500;
+        }
+
+        .note-card {
+            background: var(--card-bg);
+            border-radius: 8px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+            overflow: hidden;
+            border-left: 5px solid var(--primary-color);
+        }
+
+        .note-header {
+            padding: 15px 20px;
+            background-color: #f1f5f9;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .note-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--secondary-color);
+            margin: 0;
+        }
+
+        .tag {
+            background-color: var(--primary-color);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .tag.pattern { background-color: var(--accent-color); }
+        .tag.safety { background-color: #dc2626; }
+
+        .note-content {
+            padding: 20px;
+        }
+
+        .explanation {
+            margin-bottom: 15px;
+        }
+
+        .code-block {
+            background-color: var(--code-bg);
+            color: var(--code-text);
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9rem;
+            border: 1px solid #333;
+        }
+
+        .keyword { color: #569cd6; }
+        .type { color: #4ec9b0; }
+        .string { color: #ce9178; }
+        .comment { color: #6a9955; font-style: italic; }
+        .method { color: #dcdcaa; }
+
+        ul {
+            padding-left: 20px;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        .impact-box {
+            margin-top: 15px;
+            padding: 10px 15px;
+            background-color: #eff6ff;
+            border-radius: 4px;
+            border: 1px solid #bfdbfe;
+            color: #1e3a8a;
+            font-size: 0.95rem;
+        }
+        
+        .impact-title {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 4px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Architektura Asynchroniczna</h1>
+        <div class="subtitle">Analiza kodu FlightScanner.Client</div>
+    </header>
+
+    <div class="note-card">
+        <div class="note-header">
+            <h3 class="note-title">1. Zarządzanie czasem i anulowaniem</h3>
+            <span class="tag safety">Bezpieczeństwo</span>
+        </div>
+        <div class="note-content">
+            <div class="explanation">
+                Zastosowanie mechanizmu <code>CancellationTokenSource</code> z limitem czasowym. Jest to kluczowy element zapobiegający "wiszeniu" aplikacji, gdy zewnętrzne API nie odpowiada.
+            </div>
+            <div class="code-block">
+<span class="keyword">public const int</span> TimeoutMs = 3000;<br>
+<span class="comment">// ...</span><br>
+<span class="keyword">using var</span> cts = <span class="keyword">new</span> <span class="type">CancellationTokenSource</span>(TimeoutMs);<br>
+<span class="comment">// Przekazanie tokenu dalej:</span><br>
+<span class="keyword">await</span> httpClient.GetAsync(provider.Endpoint, cts.Token);
+            </div>
+            <div class="impact-box">
+                <span class="impact-title">Zastosowanie:</span>
+                Gwarantuje, że cała operacja (niezależnie od liczby zapytań) zakończy się (sukcesem lub błędem) w ciągu 3 sekund. Token jest propagowany w dół stosu wywołań.
+            </div>
+        </div>
+    </div>
+
+    <div class="note-card">
+        <div class="note-header">
+            <h3 class="note-title">2. Wzorzec Scatter-Gather (Rozprosz-Zbierz)</h3>
+            <span class="tag pattern">Wydajność</span>
+        </div>
+        <div class="note-content">
+            <div class="explanation">
+                Zamiast używać <code>await</code> w pętli (co dałoby sekwencyjne wykonywanie: A...potem B...potem C), kod tworzy listę "gorących" zadań (Tasks), które startują natychmiast, a potem czeka na wszystkie naraz.
+            </div>
+            <div class="code-block">
+<span class="keyword">var</span> tasks = <span class="keyword">new</span> <span class="type">List</span>&lt;<span class="type">Task</span>&lt;<span class="type">ProviderResponseDto</span>?&gt;&gt;();<br>
+<br>
+<span class="keyword">foreach</span> (<span class="keyword">var</span> provider <span class="keyword">in</span> providers)<br>
+{<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// WAŻNE: Dodajemy zadanie do listy, NIE czekamy (brak await tutaj)</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;tasks.Add(GetFlightsFromProviderAsync(...));<br>
+}<br>
+<br>
+<span class="comment">// Czekamy, aż najwolniejsze zapytanie się skończy</span><br>
+<span class="keyword">var</span> results = <span class="keyword">await</span> <span class="type">Task</span>.WhenAll(tasks);
+            </div>
+            <div class="impact-box">
+                <span class="impact-title">Zastosowanie:</span>
+                Maksymalizacja wykorzystania łącza sieciowego. Czas wykonania = czas najwolniejszego zapytania, a nie suma wszystkich czasów.
+            </div>
+        </div>
+    </div>
+
+    <div class="note-card">
+        <div class="note-header">
+            <h3 class="note-title">3. Raportowanie postępu (IProgress&lt;T&gt;)</h3>
+            <span class="tag">Dobre Praktyki</span>
+        </div>
+        <div class="note-content">
+            <div class="explanation">
+                Abstrakcja pozwalająca metodzie asynchronicznej informować "świat zewnętrzny" o postępach bez wiedzy o tym, czy jest to aplikacja konsolowa, czy okienkowa (WPF/WinForms).
+            </div>
+            <div class="code-block">
+<span class="type">IProgress</span>&lt;<span class="keyword">string</span>&gt; progress = <span class="keyword">new</span> <span class="type">Progress</span>&lt;<span class="keyword">string</span>&gt;(<span class="type">Console</span>.WriteLine);<br>
+<br>
+<span class="comment">// Wewnątrz metody asynchronicznej:</span><br>
+progress.Report(<span class="string">$"[Phase 1] Found {providers.Count} providers."</span>);
+            </div>
+            <div class="impact-box">
+                <span class="impact-title">Zastosowanie:</span>
+                Separacja logiki biznesowej od UI. W aplikacjach UI <code>Progress&lt;T&gt;</code> automatycznie dba o <i>SynchronizationContext</i> (powrót na wątek główny), w konsoli działa bezpośrednio.
+            </div>
+        </div>
+    </div>
+
+    <div class="note-card">
+        <div class="note-header">
+            <h3 class="note-title">4. Izolacja błędów w Taskach</h3>
+            <span class="tag safety">Stabilność</span>
+        </div>
+        <div class="note-content">
+            <div class="explanation">
+                Metoda <code>GetFlightsFromProviderAsync</code> posiada własny blok <code>try-catch</code> i w razie błędu zwraca <code>null</code> zamiast rzucać wyjątek wyżej.
+            </div>
+            <div class="code-block">
+<span class="keyword">try</span> { <span class="comment">/* logic */</span> }<br>
+<span class="keyword">catch</span> (<span class="type">Exception</span> ex)<br>
+{<br>
+&nbsp;&nbsp;&nbsp;&nbsp;progress.Report(<span class="string">$"Error: {ex.Message}"</span>);<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="keyword">return</span> <span class="keyword">null</span>; <span class="comment">// Bezpieczny powrót</span><br>
+}
+            </div>
+            <div class="impact-box">
+                <span class="impact-title">Zastosowanie:</span>
+                Kluczowe przy <code>Task.WhenAll</code>. Gdyby jeden Task rzucił wyjątek bez tego zabezpieczenia, cała agregacja mogłaby zostać przerwana. Tutaj błąd jednego dostawcy nie ubija całej aplikacji.
+            </div>
+        </div>
+    </div>
+
+    <div class="note-card">
+        <div class="note-header">
+            <h3 class="note-title">5. Async Main (Top-level entry point)</h3>
+            <span class="tag">C# Feature</span>
+        </div>
+        <div class="note-content">
+            <div class="explanation">
+                Możliwość oznaczenia metody startowej jako asynchronicznej. Pozwala to na użycie <code>await</code> już na samym początku programu.
+            </div>
+            <div class="code-block">
+<span class="keyword">public static async</span> <span class="type">Task</span> Main(<span class="keyword">string</span>[] args)<br>
+{<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="keyword">await</span> RunFlightScannerAsync();<br>
+}
+            </div>
+            <div class="impact-box">
+                <span class="impact-title">Zastosowanie:</span>
+                Eliminuje stare obejścia typu <code>.GetAwaiter().GetResult()</code> lub <code>.Wait()</code>, które mogły prowadzić do deadlocków lub trudnych w analizie wyjątków (AggregateException).
+            </div>
+        </div>
+    </div>
+
+    <div class="note-card">
+        <div class="note-header">
+            <h3 class="note-title">6. Nieblokujące operacje I/O (HttpClient)</h3>
+            <span class="tag pattern">Resource Management</span>
+        </div>
+        <div class="note-content">
+            <div class="explanation">
+                Użycie metod kończących się na <code>Async</code> (np. <code>GetAsync</code>, <code>ReadFromJsonAsync</code>).
+            </div>
+            <div class="code-block">
+<span class="comment">// Wątek jest zwalniany na czas oczekiwania na odpowiedź HTTP</span><br>
+<span class="keyword">var</span> response = <span class="keyword">await</span> httpClient.GetAsync(provider.Endpoint, ct);
+            </div>
+            <div class="impact-box">
+                <span class="impact-title">Zastosowanie:</span>
+                Podczas gdy kod czeka na odpowiedź sieciową (co trwa np. 200ms), wątek procesora nie jest zablokowany ("busy waiting") i może wrócić do puli wątków, by obsłużyć inne zadania. To podstawa skalowalności.
+            </div>
+        </div>
+    </div>
+
+</div>
+
+</body>
+</html>
