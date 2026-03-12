@@ -272,3 +272,109 @@ int main(int argc, char **argv) {
 
     return EXIT_SUCCESS;
 }
+
+int** parser(const char* filepath, int *n_out) {
+    int fd = open(filepath, O_RDONLY);
+    if (fd < 0) {
+        perror("Błąd open");
+        exit(EXIT_FAILURE);
+    }
+    char buffer[65536]; 
+    ssize_t bytes_read = TEMP_FAILURE_RETRY(read(fd, buffer, sizeof(buffer) - 1));
+    
+    if (bytes_read < 0) {
+        perror("Błąd read");
+        close(fd);
+        exit(EXIT_FAILURE);
+    }
+    
+    buffer[bytes_read] = '\0'; 
+    close(fd); 
+
+    char *ptr = buffer; 
+    int n, offset;
+
+    if (sscanf(ptr, "%d%n", &n, &offset) != 1) {
+        fprintf(stderr, "Błąd: Plik jest pusty lub zły format!\n");
+        exit(EXIT_FAILURE);
+    }
+    
+    ptr += offset; 
+    *n_out = n;
+
+    int **matrix = malloc(n * sizeof(int*));
+    if (!matrix) {
+        perror("Błąd malloc");
+        exit(EXIT_FAILURE);
+    }
+    for (int i = 0; i < n; i++) {
+        matrix[i] = calloc(n, sizeof(int));
+    }
+
+    int u, v;
+    while (sscanf(ptr, "%d %d%n", &u, &v, &offset) == 2) {
+        if (u >= 0 && u < n && v >= 0 && v < n) {
+            matrix[u][v] = 1;
+            matrix[v][u] = 1; 
+        } else {
+            fprintf(stderr, "Ostrzeżenie: Krawędź %d-%d wykracza poza rozmiar!\n", u, v);
+        }
+        ptr += offset;
+    }
+
+    return matrix;
+}
+
+void print_matrix(int **matrix, int n) {
+    printf("Macierz sąsiedztwa (%dx%d):\n", n, n);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            printf("%d ", matrix[i][j]);
+        }
+        printf("\n");
+    }
+}
+
+
+FILE *file = fopen(filepath, "r");
+    if (!file) {
+        perror("Błąd otwarcia pliku");
+        exit(EXIT_FAILURE);
+    }
+
+    int n;
+    if (fscanf(file, "%d", &n) != 1) {
+        fprintf(stderr, "Błąd: Plik jest pusty lub ma zły format!\n");
+        fclose(file);
+        exit(EXIT_FAILURE);
+    }
+    
+    *n_out = n; 
+
+    int **matrix = malloc(n * sizeof(int*));
+    if (!matrix) {
+        perror("Błąd alokacji pamięci");
+        exit(EXIT_FAILURE);
+    }
+    
+    for (int i = 0; i < n; i++) {
+        matrix[i] = calloc(n, sizeof(int)); 
+        if (!matrix[i]) {
+            perror("Błąd alokacji pamięci wiersza");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    int u, v;
+    while (fscanf(file, "%d %d", &u, &v) == 2) {
+
+        if (u >= 0 && u < n && v >= 0 && v < n) {
+            matrix[u][v] = 1;
+            matrix[v][u] = 1; 
+        } else {
+            fprintf(stderr, "Ostrzeżenie: Krawędź %d-%d wykracza poza rozmiar grafu!\n", u, v);
+        }
+    }
+
+    fclose(file);
+    return matrix;
