@@ -9,9 +9,9 @@ bool isAnimating = false;
 
 double currentOffsetAngle = 0.0; // Aktualny obrót tarczy
 double startMouseAngle = 0.0;    // Kąt chwytu myszki
-double velocity = 0.0;           // Prędkość obrotu (dla fizyki sprężyny)
+double velocity = 0.0;           // Prędkość obrotu (fizyka sprężyny)
 
-WNDPROC OldStaticProc;
+WNDPROC OldButtonProc; // Przechowuje oryginalną procedurę przycisku
 
 // --- FUNKCJA AKTUALIZUJĄCA POZYCJE ---
 void UpdatePositions(HWND hwnd) {
@@ -23,10 +23,7 @@ void UpdatePositions(HWND hwnd) {
 
     for (int i = 0; i < 12; ++i) {
         int faceNumber = (i == 0) ? 12 : i;
-        // Kąt bazowy (od -90 stopni)
         double baseAngle = -1.5707963268 + (i * 0.5235987756); 
-        
-        // Dodajemy nasz aktualny, globalny obrót
         double currentAngle = baseAngle + currentOffsetAngle;
 
         int x = cx + (int)(radius * cos(currentAngle)) - 20;
@@ -36,16 +33,23 @@ void UpdatePositions(HWND hwnd) {
     }
 }
 
-// --- SUBCLASSING (Przekazywanie kliknięć do głównego okna) ---
-LRESULT CALLBACK DigitSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (uMsg == WM_LBUTTONDOWN) {
+// --- SUBCLASSING PRZYCISKÓW ---
+LRESULT CALLBACK ButtonSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    // Przechwytujemy wciśnięcie (oraz szybkie podwójne kliknięcie)
+    if (uMsg == WM_LBUTTONDOWN || uMsg == WM_LBUTTONDBLCLK) {
         HWND hParent = GetParent(hwnd);
         POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        
+        // Tłumaczymy pozycję myszy z wnętrza przycisku na kordynaty okna głównego
         MapWindowPoints(hwnd, hParent, &pt, 1);
-        SendMessageW(hParent, uMsg, wParam, MAKELPARAM(pt.x, pt.y));
-        return 0;
+        
+        // Przekazujemy kliknięcie do okna głównego, aby mogło rozpocząć obrót
+        SendMessageW(hParent, WM_LBUTTONDOWN, wParam, MAKELPARAM(pt.x, pt.y));
+        
+        // ZWRACAMY 0! Blokujemy domyślne zachowanie przycisku (nie kradnie myszy)
+        return 0; 
     }
-    return CallWindowProc(OldStaticProc, hwnd, uMsg, wParam, lParam);
+    return CallWindowProc(OldButtonProc, hwnd, uMsg, wParam, lParam);
 }
 
 // --- GŁÓWNA PROCEDURA OKNA ---
@@ -58,14 +62,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             int faceNumber = (i == 0) ? 12 : i;
             std::wstring text = std::to_wstring(faceNumber);
             
+            // ZMIANA: Używamy klasy "BUTTON" i stylu BS_PUSHBUTTON
             hDigits[i] = CreateWindowExW(
-                0, L"STATIC", text.c_str(),
-                WS_CHILD | WS_VISIBLE | WS_BORDER | SS_CENTER | SS_CENTERIMAGE,
-                0, 0, 40, 40, hwnd, nullptr, GetModuleHandle(nullptr), nullptr
+                0, L"BUTTON", text.c_str(),
+                WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                0, 0, 40, 40, hwnd, (HMENU)(INT_PTR)(100 + i), 
+                GetModuleHandle(nullptr), nullptr
             );
             
             SendMessageW(hDigits[i], WM_SETFONT, (WPARAM)hFont, FALSE);
-            OldStaticProc = (WNDPROC)SetWindowLongPtrW(hDigits[i], GWLP_WNDPROC, (LONG_PTR)DigitSubclassProc);
+            
+            // Podpinamy subclassing pod nasz przycisk
+            OldButtonProc = (WNDPROC)SetWindowLongPtrW(hDigits[i], GWLP_WNDPROC, (LONG_PTR)ButtonSubclassProc);
         }
         
         UpdatePositions(hwnd);
@@ -82,7 +90,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         }
 
         if (isDigit) {
-            // Zatrzymujemy ewentualną animację, jeśli złapiemy w locie
             if (isAnimating) {
                 KillTimer(hwnd, 1);
                 isAnimating = false;
@@ -94,7 +101,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             int cx = (rc.right - rc.left) / 2;
             int cy = (rc.bottom - rc.top) / 2;
             
-            // Odejmujemy currentOffsetAngle, by tarcza nie "skoczyła" pod kursor
             startMouseAngle = atan2(pt.y - cy, pt.x - cx) - currentOffsetAngle;
             SetCapture(hwnd);
         }
@@ -109,8 +115,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             int cy = (rc.bottom - rc.top) / 2;
             
             double currentMouseAngle = atan2(pt.y - cy, pt.x - cx);
-            
-            // Sztywno podpinamy wychylenie pod ruch myszy
             currentOffsetAngle = currentMouseAngle - startMouseAngle;
             UpdatePositions(hwnd);
         }
@@ -122,34 +126,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             isDragging = false;
             ReleaseCapture();
             
-            // Zamiast zerować obrót, STARTUJEMY ANIMACJĘ SPRĘŻYNY
             isAnimating = true;
-            SetTimer(hwnd, 1, 16, nullptr); // ~60 FPS
+            SetTimer(hwnd, 1, 16, nullptr); // Start fizyki sprężyny po puszczeniu guzika
         }
         return 0;
     }
 
     case WM_TIMER: {
         if (isAnimating) {
-            // FIZYKA SPRĘŻYNY
-            // 1. Siła sprężyny ciągnąca w stronę zera (kąt bazowy)
             velocity += (0.0 - currentOffsetAngle) * 0.1; 
-            
-            // 2. Tarcie, żeby sprężyna zwalniała
             velocity *= 0.85; 
-            
-            // 3. Dodanie prędkości do pozycji
             currentOffsetAngle += velocity; 
 
             UpdatePositions(hwnd);
 
-            // Jeśli tarcza już prawie stoi i jest w punkcie 0, wyłączamy timer
             if (abs(currentOffsetAngle) < 0.001 && abs(velocity) < 0.001) {
                 currentOffsetAngle = 0.0;
                 velocity = 0.0;
                 isAnimating = false;
                 KillTimer(hwnd, 1);
-                UpdatePositions(hwnd); // Ostateczne wyrównanie do zera
+                UpdatePositions(hwnd);
             }
         }
         return 0;
@@ -165,7 +161,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
 // --- PUNKT WEJŚCIA (Main) ---
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
-    const wchar_t CLASS_NAME[] = L"SprezystaTarczaClass";
+    const wchar_t CLASS_NAME[] = L"ObrotowePrzyciskiClass";
 
     WNDCLASSW wc = {};
     wc.lpfnWndProc = WindowProc;
@@ -177,7 +173,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     RegisterClassW(&wc);
 
     HWND hwnd = CreateWindowExW(
-        0, CLASS_NAME, L"Obrotowe Okienka (Sprezyna)",
+        0, CLASS_NAME, L"Telefon (Przyciski + Sprezyna)",
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 600, 600,
         nullptr, nullptr, hInstance, nullptr
     );
